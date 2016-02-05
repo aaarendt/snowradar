@@ -7,6 +7,7 @@
 import pandas as pd
 from sqlalchemy import create_engine
 import settings as s # contains password info. Not included in git repo for security.
+import glob
 
 # get connection string from settings.py
 cs = getattr(s,'localhost_SurfaceBook')
@@ -14,52 +15,63 @@ cs = getattr(s,'localhost_SurfaceBook')
 # connect to the database
 engine = create_engine('postgresql://' + cs['user'] + ':' + str(cs['password'])[2:-1] + '@' + cs['host'] + ':' + cs['port'] + '/' + cs['dbname'])
 
-# ingest the data to a pandas dataframe
-data = pd.read_csv(r'c:/work/mnt/sweData/gulkana_2014.txt',sep = '\t')
+rootFolder = r'c:/work/mnt/sweData/'
 
-# I don't think we need this if the column names are consistent from the start
-#data.columns=['trace','long','lat','elev','twtt','thickness','swe','collection']
+fileList = glob.glob(rootFolder + '*.txt')
 
-# for when we start looping
+df = pd.DataFrame()
+for file in fileList:
+    data = pd.read_csv(file, sep = '\t')
+    df = df.append(data, ignore_index = True)
 
-#f irst = 1
-#if first:
-#    df = data
-#    first = 0
-#else:
-#    df = df.append(data)
+# create a temporary database table to later SET with the master table. Make sure the temporary table name does not yet exist       
 
-# this performs the ingest to the database. Make sure the table name does not yet exist       
-
-dbnamePts = "gulkpoints"
-data.to_sql(%s, engine) %(dbname)
-
+dbnamePts = 'sweingest'
+df.to_sql(dbnamePts,engine, index = False)
 # create the geometry field
 engine.execute("""ALTER TABLE %s ADD COLUMN geom geometry(Point, 3338);""" %(dbnamePts)) 
 # populate the geometry field
-engine.execute("""UPDATE swe_ingest8 SET geom = ST_TRANSFORM(ST_setSRID(ST_MakePoint(long,lat),4326),3338);""" %(dbnamePts))
+engine.execute("""UPDATE %s SET geom = ST_Transform(ST_setSRID(ST_MakePoint(long,lat),4326),3338);""" %(dbnamePts))
 # generate the primary key
 engine.execute("""ALTER TABLE %s ADD COLUMN gid SERIAL;""" %(dbnamePts))
-engine.execute("""UPDATE %s SET gid = nextval(pg_get_serial_sequence('%s','gid'));""" %(dbname, dbnamePts))
+engine.execute("""UPDATE %s SET gid = nextval(pg_get_serial_sequence('%s','gid'));""" %(dbnamePts, dbnamePts))
 engine.execute("""ALTER TABLE %s ADD PRIMARY KEY(gid);""" %(dbnamePts))
 
 # make the associated line file
 
+dbnameLines = 'sweingest_lines'
 
-# ingest the metadata to a pandas dataframe
-data = pd.read_csv(r'c:/work/mnt/sweData/gulkana_2014_meta_lines.txt',sep = '\t')
-
-dbnameLines = 'gulkLines"
 engine.execute("""CREATE TABLE %s (collection text, geom geometry(Linestring, 3338));""" %(dbnameLines))
-engine.execute("""WITH upd AS 
-(SELECT collection, ST_MakeLine(geom) as newgeom FROM %s GROUP BY collection)
-INSERT INTO %s SELECT * FROM upd;""" %(dbnamePts, dbnameLines))
-
-# something in here to merge the metatadata attributes with the geometries
-
+query = "WITH linecreation AS (SELECT collection, ST_MakeLine(geom) as geom FROM %s GROUP BY collection) INSERT INTO %s SELECT * FROM linecreation;" %(dbnamePts, dbnameLines)
+# this seems not to work in script - had to issue manually?
+engine.execute(query)
 # generate the primary key
 engine.execute("""ALTER TABLE %s ADD COLUMN gid SERIAL;""" %(dbnameLines))
-engine.execute("""UPDATE %s SET gid = nextval(pg_get_serial_sequence('%s','gid'));""" %(dbname, dbnameLines))
+engine.execute("""UPDATE %s SET gid = nextval(pg_get_serial_sequence('%s','gid'));""" %(dbnameLines, dbnameLines))
 engine.execute("""ALTER TABLE %s ADD PRIMARY KEY(gid);""" %(dbnameLines))
 
-print ('done')
+
+# ingest the metadata to a pandas dataframe
+fileList = glob.glob(rootFolder + 'metalines/*.txt')
+
+df = pd.DataFrame()
+for file in fileList:
+    data = pd.read_csv(file, sep = '\t')
+    df = df.append(data, ignore_index = True)
+
+df['date'] = pd.to_datetime(df['date'], format = "%m/%d/%Y")
+
+dbnameMeta = 'sweingest_metadata'
+df.to_sql(dbnameMeta,engine, index = False)
+# generate the primary key
+engine.execute("""ALTER TABLE %s ADD COLUMN gid SERIAL;""" %(dbnameMeta))
+engine.execute("""UPDATE %s SET gid = nextval(pg_get_serial_sequence('%s','gid'));""" %(dbnameMeta, dbnameMeta))
+engine.execute("""ALTER TABLE %s ADD PRIMARY KEY(gid);""" %(dbnameMeta))
+
+# merge the geometries into the metadata table
+
+# first make a new geom column
+engine.execute("""ALTER TABLE %s ADD COLUMN geom geometry(Linestring, 3338);""" % (dbnameMeta))
+engine.execute("""UPDATE %s AS sm SET geom = l.geom FROM (SELECT geom, collection FROM %s) AS l WHERE sm.collection = l.collection;""" % (dbnameMeta, dbnameMeta))
+
+# manually move these to the master database and merge!

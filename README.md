@@ -1,1 +1,1 @@
-### scripts to ingest Alaska snow radar data 
+### scripts to ingest Alaska snow radar data
