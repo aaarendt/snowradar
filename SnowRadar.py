@@ -42,7 +42,7 @@ engine.execute("""ALTER TABLE %s ADD PRIMARY KEY(gid);""" %(dbnamePts))
 dbnameLines = 'sweingest_lines'
 
 engine.execute("""CREATE TABLE %s (collection text, geom geometry(Linestring, 3338));""" %(dbnameLines))
-query = "WITH linecreation AS (SELECT collection, ST_MakeLine(geom) as geom FROM %s GROUP BY collection) INSERT INTO %s SELECT * FROM linecreation;" %(dbnamePts, dbnameLines)
+query = 'WITH linecreation AS (SELECT collection, ST_MakeLine(geom) as geom FROM ' + dbnameLines + ' GROUP BY collection) INSERT INTO ' + dbnameLines + ' SELECT * FROM linecreation;'
 # this seems not to work in script - had to issue manually?
 engine.execute(query)
 # generate the primary key
@@ -74,4 +74,22 @@ engine.execute("""ALTER TABLE %s ADD PRIMARY KEY(gid);""" %(dbnameMeta))
 engine.execute("""ALTER TABLE %s ADD COLUMN geom geometry(Linestring, 3338);""" % (dbnameMeta))
 engine.execute("""UPDATE %s AS sm SET geom = l.geom FROM (SELECT geom, collection FROM %s) AS l WHERE sm.collection = l.collection;""" % (dbnameMeta, dbnameMeta))
 
-# manually move these to the master database and merge!
+# manually move these to the master database and merge
+
+# a bit of the manual work got ugly:
+
+# the 2013 lines were multiLineStrings and I had to convert:
+# should be a one time thing? check this was ok?
+
+#ALTER TABLE sl ADD COLUMN geom2 geometry(Linestring, 3338);
+#UPDATE sl SET geom2 = ST_LineMerge(s.geom)
+#FROM 
+#(SELECT geom,collection FROM snowradar_lines) AS s
+#WHERE sl.collection = s.collection; 
+
+# create temporary merged tables before committing:
+
+#CREATE TABLE newsl AS
+#(SELECT collection, velocity, density, date, obs_type, geom FROM sweingest_metadata
+#UNION
+#SELECT collection, velocity, density, date, obs_type, geom FROM sl);
