@@ -6,11 +6,13 @@
 
 import pandas as pd
 from sqlalchemy import create_engine
+import sys
+sys.path.append('c:\work\src')
 import settings as s # contains password info. Not included in git repo for security.
 import glob
 
 # get connection string from settings.py
-cs = getattr(s,'localhost_SurfaceBook')
+cs = getattr(s,'AWS_localhost')
 
 # connect to the database
 engine = create_engine('postgresql://' + cs['user'] + ':' + str(cs['password'])[2:-1] + '@' + cs['host'] + ':' + cs['port'] + '/' + cs['dbname'])
@@ -25,6 +27,8 @@ for file in fileList:
     df = df.append(data, ignore_index = True)
 
 # create a temporary database table to later SET with the master table. Make sure the temporary table name does not yet exist       
+
+df = pd.read_excel(rootFolder + 'scott_glacier_2013_helo_swe.xlsx')
 
 dbnamePts = 'sweingest'
 df.to_sql(dbnamePts,engine, index = False)
@@ -42,8 +46,8 @@ engine.execute("""ALTER TABLE %s ADD PRIMARY KEY(gid);""" %(dbnamePts))
 dbnameLines = 'sweingest_lines'
 
 engine.execute("""CREATE TABLE %s (collection text, geom geometry(Linestring, 3338));""" %(dbnameLines))
-query = 'WITH linecreation AS (SELECT collection, ST_MakeLine(geom) as geom FROM ' + dbnameLines + ' GROUP BY collection) INSERT INTO ' + dbnameLines + ' SELECT * FROM linecreation;'
-# this seems not to work in script - had to issue manually?
+query = 'WITH linecreation AS (SELECT collection, ST_MakeLine(geom) as geom FROM ' + dbnamePts + ' GROUP BY collection) INSERT INTO ' + dbnameLines + ' SELECT * FROM linecreation;'
+# not sure why this doesn't work in line
 engine.execute(query)
 # generate the primary key
 engine.execute("""ALTER TABLE %s ADD COLUMN gid SERIAL;""" %(dbnameLines))
@@ -89,7 +93,14 @@ engine.execute("""UPDATE %s AS sm SET geom = l.geom FROM (SELECT geom, collectio
 
 # create temporary merged tables before committing:
 
-#CREATE TABLE newsl AS
-#(SELECT collection, velocity, density, date, obs_type, geom FROM sweingest_metadata
-#UNION
-#SELECT collection, velocity, density, date, obs_type, geom FROM sl);
+query = """CREATE TABLE snowradar AS \
+(SELECT elev, twtt, thickness, swe, trace, geom FROM sweingest \
+UNION \
+SELECT elev, twtt, thickness, swe, trace, geom FROM snowradar_old);"""
+engine.execute(query)
+
+dbname = 'snowradar'
+# generate the primary key
+engine.execute("""ALTER TABLE %s ADD COLUMN gid SERIAL;""" %(dbname))
+engine.execute("""UPDATE %s SET gid = nextval(pg_get_serial_sequence('%s','gid'));""" %(dbname, dbname))
+engine.execute("""ALTER TABLE %s ADD PRIMARY KEY(gid);""" %(dbname))
